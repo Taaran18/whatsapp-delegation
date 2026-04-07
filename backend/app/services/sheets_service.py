@@ -1,9 +1,10 @@
 """
-Google Sheets service — replaces the database layer.
+Google Sheets service.
 
-Sheet: "WhatsApp Delegation"
-  Tab 1: Tasks         (columns A–R)
-  Tab 2: Message Logs  (columns A–F)
+Tabs:
+  Tasks        — A:R  (main task data)
+  Message Logs — A:F  (raw log)
+  Config       — A: Name, B: Mail ID, D: Customer Name
 """
 import json
 from datetime import datetime
@@ -23,10 +24,19 @@ TASK_COLUMNS = [
     "status", "message_type",
 ]
 
-LOG_COLUMNS = [
-    "received_at", "sender_number", "message_type",
-    "raw_text", "task_id_created", "error",
-]
+TASK_DISPLAY_NAMES = {
+    "task_description":  "Task Description",
+    "assigned_to":       "Assigned To",
+    "employee_email_id": "Employee Email",
+    "target_date":       "Target Date",
+    "priority":          "Priority",
+    "approval_needed":   "Approval Needed",
+    "client_name":       "Client Name",
+    "department":        "Department",
+    "assigned_name":     "Assigned Name",
+    "assigned_email_id": "Assigned Email",
+    "comments":          "Comments",
+}
 
 
 def _get_service():
@@ -40,10 +50,47 @@ def _get_service():
     return build("sheets", "v4", credentials=creds)
 
 
-# ── Task ID generation ────────────────────────────────────────────────────────
+# ── Config sheet lookup ───────────────────────────────────────────────────────
+
+def get_config_lookup() -> dict:
+    """
+    Returns:
+      {
+        "employees": { "Taaran Jain": "jain.taaran@e-marketing.io", ... },
+        "customers":  ["Acme Corp", "Bikaner Polymers", ...]
+      }
+    """
+    service = _get_service()
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(spreadsheetId=settings.google_sheet_id, range="Config!A2:D")
+        .execute()
+    )
+    rows = result.get("values", [])
+    employees = {}
+    customers = []
+    for row in rows:
+        # pad to 4 cols
+        row += [""] * (4 - len(row))
+        name, email, _, customer = row[0], row[1], row[2], row[3]
+        if name and email:
+            employees[name.strip().lower()] = email.strip()
+        if customer:
+            customers.append(customer.strip())
+    return {"employees": employees, "customers": customers}
+
+
+def lookup_employee_email(name: str, config: dict) -> str:
+    """Return email if name matches an employee in Config, else empty string."""
+    if not name:
+        return ""
+    return config["employees"].get(name.strip().lower(), "")
+
+
+# ── Task ID ───────────────────────────────────────────────────────────────────
 
 def get_next_task_id() -> str:
-    """Count existing task rows and return next sequential ID."""
     service = _get_service()
     result = (
         service.spreadsheets()
@@ -51,15 +98,13 @@ def get_next_task_id() -> str:
         .get(spreadsheetId=settings.google_sheet_id, range="Tasks!B:B")
         .execute()
     )
-    rows = result.get("values", [])
-    count = len(rows)  # includes header row; count=1 means no tasks yet
+    count = len(result.get("values", []))
     return f"TASK-{count:04d}"
 
 
 # ── Tasks ─────────────────────────────────────────────────────────────────────
 
 def append_task(task_data: dict) -> None:
-    """Append one task row to the Tasks sheet."""
     service = _get_service()
     row = [str(task_data.get(col, "") or "") for col in TASK_COLUMNS]
     (
@@ -76,7 +121,6 @@ def append_task(task_data: dict) -> None:
 
 
 def get_all_tasks(status: str = None, priority: str = None, limit: int = 100, offset: int = 0) -> list[dict]:
-    """Read all task rows and return as list of dicts."""
     service = _get_service()
     result = (
         service.spreadsheets()
@@ -85,27 +129,29 @@ def get_all_tasks(status: str = None, priority: str = None, limit: int = 100, of
         .execute()
     )
     rows = result.get("values", [])
-
     tasks = []
     for row in rows:
-        row += [""] * (len(TASK_COLUMNS) - len(row))  # pad short rows
+        row += [""] * (len(TASK_COLUMNS) - len(row))
         task = dict(zip(TASK_COLUMNS, row))
         if status and task.get("status") != status:
             continue
         if priority and task.get("priority") != priority:
             continue
         tasks.append(task)
-
-    # newest first (sheet stores oldest first)
     tasks.reverse()
     return tasks[offset: offset + limit]
 
 
-def update_task(task_id: str, updates: dict) -> dict | None:
-    """Find row by task_id and update specified columns."""
-    service = _get_service()
+def get_task_by_id(task_id: str) -> dict | None:
+    tasks = get_all_tasks()
+    for t in tasks:
+        if t.get("task_id") == task_id:
+            return t
+    return None
 
-    # Find the row index
+
+def update_task(task_id: str, updates: dict) -> dict | None:
+    service = _get_service()
     result = (
         service.spreadsheets()
         .values()
@@ -116,13 +162,11 @@ def update_task(task_id: str, updates: dict) -> dict | None:
     row_index = None
     for i, row in enumerate(rows):
         if row and row[0] == task_id:
-            row_index = i + 1  # sheet rows are 1-indexed
+            row_index = i + 1
             break
-
     if row_index is None:
         return None
 
-    # Update each changed column individually
     for col_name, value in updates.items():
         if col_name in TASK_COLUMNS:
             col_letter = chr(ord("A") + TASK_COLUMNS.index(col_name))
@@ -138,31 +182,49 @@ def update_task(task_id: str, updates: dict) -> dict | None:
                 .execute()
             )
 
-    # Return updated task
-    result = (
-        service.spreadsheets()
-        .values()
-        .get(
-            spreadsheetId=settings.google_sheet_id,
-            range=f"Tasks!A{row_index}:R{row_index}",
-        )
-        .execute()
-    )
-    row = result.get("values", [[]])[0]
-    row += [""] * (len(TASK_COLUMNS) - len(row))
-    return dict(zip(TASK_COLUMNS, row))
+    return get_task_by_id(task_id)
+
+
+# ── Confirmation message builder ──────────────────────────────────────────────
+
+def build_confirmation_message(task: dict) -> str:
+    """Build the WhatsApp reply showing filled and pending fields."""
+    filled = []
+    pending = []
+
+    for col, label in TASK_DISPLAY_NAMES.items():
+        val = task.get(col, "")
+        if val and val.strip():
+            filled.append(f"  • {label}: {val}")
+        else:
+            pending.append(f"  • {label}")
+
+    lines = [f"✅ Task Recorded! ID: *{task['task_id']}*", ""]
+
+    if filled:
+        lines.append("📋 *Details Recorded:*")
+        lines.extend(filled)
+
+    if pending:
+        lines.append("")
+        lines.append("⏳ *Pending Details:*")
+        lines.extend(pending)
+        lines.append("")
+        lines.append(f"To fill pending details, reply:\n*/update {task['task_id']}*\nfollowed by the missing info in natural language.")
+        lines.append(f"\nExample:\n/update {task['task_id']} department: Marketing, email: john@acme.com, approval: yes")
+
+    return "\n".join(lines)
 
 
 # ── Message Logs ──────────────────────────────────────────────────────────────
 
 def log_message(sender: str, msg_type: str, raw_text: str, task_id: str = "", error: str = "") -> None:
-    """Append a row to the Message Logs tab."""
     service = _get_service()
     row = [
         datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"),
         sender,
         msg_type,
-        raw_text[:500],  # truncate long payloads
+        raw_text[:500],
         task_id,
         error,
     ]
