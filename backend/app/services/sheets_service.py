@@ -82,10 +82,26 @@ def get_config_lookup() -> dict:
 
 
 def lookup_employee_email(name: str, config: dict) -> str:
-    """Return email if name matches an employee in Config, else empty string."""
+    """
+    Return email for a matching employee name.
+    Tries exact match first, then partial match
+    (e.g. "Rahul" matches "Rahul Meharchandani").
+    """
     if not name:
         return ""
-    return config["employees"].get(name.strip().lower(), "")
+    needle = name.strip().lower()
+    employees = config["employees"]
+
+    # 1. Exact match
+    if needle in employees:
+        return employees[needle]
+
+    # 2. Partial match — needle is contained in a full name
+    for full_name, email in employees.items():
+        if needle in full_name or full_name in needle:
+            return email
+
+    return ""
 
 
 # ── Task ID ───────────────────────────────────────────────────────────────────

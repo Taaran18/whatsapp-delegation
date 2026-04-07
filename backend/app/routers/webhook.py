@@ -2,7 +2,7 @@
 POST /webhook  — receives incoming WhatsApp messages via maytapi.
 
 Commands handled:
-  /assign-task <text>   → extract fields, save to Tasks sheet, confirm
+  /task <text>          → extract fields, save to Tasks sheet, confirm
   /update <TASK-ID> ... → fill pending fields on existing task
   voice message         → transcribe, extract, save, confirm
 """
@@ -203,7 +203,7 @@ async def webhook(request: Request):
             body: str = msg.get("text", "")
             logger.info("Text body: %r", body)
 
-            if body.lower().startswith("/assign-task"):
+            if body.lower().startswith("/task"):
                 task_data = await _process_text(body, sender, sender_name)
 
             elif body.lower().startswith("/update"):
