@@ -42,15 +42,20 @@ def upload_audio_to_drive(local_path: str, filename: str) -> str:
 
     uploaded = (
         service.files()
-        .create(body=file_metadata, media_body=media, fields="id")
+        .create(
+            body=file_metadata,
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True,
+        )
         .execute()
     )
     file_id = uploaded["id"]
 
-    # Make file accessible to anyone with the link
     service.permissions().create(
         fileId=file_id,
         body={"role": "reader", "type": "anyone"},
+        supportsAllDrives=True,
     ).execute()
 
     return f"https://drive.google.com/file/d/{file_id}/view"

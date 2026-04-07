@@ -100,10 +100,15 @@ async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
         original_text, english_text = await openai_service.transcribe_audio(tmp.name)
         logger.info("Voice transcription: %r | translation: %r", original_text, english_text)
 
-        # Upload to Google Drive
-        filename = f"voice_{sender}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}{ext}"
-        drive_url = drive_service.upload_audio_to_drive(tmp.name, filename)
-        logger.info("Uploaded to Drive: %s", drive_url)
+        # Upload to Google Drive (only if folder ID is set and upload succeeds)
+        drive_url = media_url  # fallback: save original WhatsApp URL
+        if settings.google_drive_folder_id:
+            try:
+                filename = f"voice_{sender}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}{ext}"
+                drive_url = drive_service.upload_audio_to_drive(tmp.name, filename)
+                logger.info("Uploaded to Drive: %s", drive_url)
+            except Exception as drive_err:
+                logger.warning("Drive upload failed, saving WhatsApp URL instead: %s", drive_err)
 
         # Extract task fields from the English translation
         config = sheets_service.get_config_lookup()
