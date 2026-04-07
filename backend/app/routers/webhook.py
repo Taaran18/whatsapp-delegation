@@ -96,6 +96,13 @@ async def _process_voice(media_id: str, sender: str, sender_name: str, db: Sessi
         os.unlink(local_path)
 
 
+@router.get("/webhook")
+async def webhook_verify(request: Request):
+    """whapi.cloud sends a GET to verify the webhook URL is reachable."""
+    logger.info("Webhook verification GET received")
+    return {"status": "ok"}
+
+
 @router.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     payload = await request.json()
