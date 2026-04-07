@@ -44,16 +44,15 @@ async def _send_reply(reply_url: str, to_phone: str, text: str):
         logger.warning("Failed to send reply: %s", exc)
 
 
-async def _process_text(raw_text: str, sender: str, sender_name: str) -> str:
+async def _process_text(raw_text: str, sender: str, sender_name: str) -> dict:
     config = sheets_service.get_config_lookup()
     fields = await openai_service.extract_task_fields(raw_text)
 
-    # Auto-fill employee email from Config if name is known
-    assigned_to = fields.get("assigned_to", "")
+    assigned_to    = sheets_service.lookup_employee_full_name(fields.get("assigned_to", ""), config)
     employee_email = fields.get("employee_email_id") or sheets_service.lookup_employee_email(assigned_to, config)
-
-    # Auto-fill assigned email from Config if sender name is known
+    assigned_name  = sheets_service.lookup_employee_full_name(fields.get("assigned_name") or sender_name, config)
     assigned_email = fields.get("assigned_email_id") or sheets_service.lookup_employee_email(sender_name, config)
+    client_name    = sheets_service.lookup_customer_name(fields.get("client_name", ""), config)
 
     task_id = sheets_service.get_next_task_id()
     task_data = {
@@ -67,14 +66,14 @@ async def _process_text(raw_text: str, sender: str, sender_name: str) -> str:
         "target_date":        fields.get("target_date", ""),
         "priority":           fields.get("priority", "Medium"),
         "approval_needed":    "Yes" if fields.get("approval_needed") else "No",
-        "client_name":        fields.get("client_name", ""),
+        "client_name":        client_name,
         "department":         fields.get("department", ""),
-        "assigned_name":      fields.get("assigned_name") or sender_name,
+        "assigned_name":      assigned_name,
         "assigned_email_id":  assigned_email,
         "comments":           fields.get("comments", ""),
         "source_link":        "",
         "status":             "Pending",
-        "message_type":       "text",
+        "message_type":       raw_text,
     }
     sheets_service.append_task(task_data)
     return task_data
@@ -100,9 +99,11 @@ async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
         config = sheets_service.get_config_lookup()
         fields = await openai_service.extract_task_fields(transcription)
 
-        assigned_to = fields.get("assigned_to", "")
+        assigned_to    = sheets_service.lookup_employee_full_name(fields.get("assigned_to", ""), config)
         employee_email = fields.get("employee_email_id") or sheets_service.lookup_employee_email(assigned_to, config)
+        assigned_name  = sheets_service.lookup_employee_full_name(fields.get("assigned_name") or sender_name, config)
         assigned_email = fields.get("assigned_email_id") or sheets_service.lookup_employee_email(sender_name, config)
+        client_name    = sheets_service.lookup_customer_name(fields.get("client_name", ""), config)
 
         task_id = sheets_service.get_next_task_id()
         task_data = {
@@ -116,14 +117,14 @@ async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
             "target_date":        fields.get("target_date", ""),
             "priority":           fields.get("priority", "Medium"),
             "approval_needed":    "Yes" if fields.get("approval_needed") else "No",
-            "client_name":        fields.get("client_name", ""),
+            "client_name":        client_name,
             "department":         fields.get("department", ""),
-            "assigned_name":      fields.get("assigned_name") or sender_name,
+            "assigned_name":      assigned_name,
             "assigned_email_id":  assigned_email,
             "comments":           fields.get("comments", ""),
             "source_link":        drive_url,
             "status":             "Pending",
-            "message_type":       "voice",
+            "message_type":       f"[Voice] {transcription}",  # store transcription
         }
         sheets_service.append_task(task_data)
         return task_data

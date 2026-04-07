@@ -68,40 +68,68 @@ def get_config_lookup() -> dict:
         .execute()
     )
     rows = result.get("values", [])
-    employees = {}
+    employees = {}      # {name_lower: email}
+    employee_names = {} # {name_lower: display_name}
     customers = []
     for row in rows:
-        # pad to 4 cols
         row += [""] * (4 - len(row))
         name, email, _, customer = row[0], row[1], row[2], row[3]
         if name and email:
-            employees[name.strip().lower()] = email.strip()
+            key = name.strip().lower()
+            employees[key] = email.strip()
+            employee_names[key] = name.strip()
         if customer:
             customers.append(customer.strip())
-    return {"employees": employees, "customers": customers}
+    return {"employees": employees, "employee_names": employee_names, "customers": customers}
 
 
-def lookup_employee_email(name: str, config: dict) -> str:
+def lookup_customer_name(mentioned: str, config: dict) -> str:
     """
-    Return email for a matching employee name.
-    Tries exact match first, then partial match
-    (e.g. "Rahul" matches "Rahul Meharchandani").
+    Match a partial/full client name against Config Customer Names.
+    e.g. "Bikaner" → "Bikaner Polymers Pvt Ltd"
+    Returns the full name from Config if matched, else returns the original.
+    """
+    if not mentioned:
+        return ""
+    needle = mentioned.strip().lower()
+    for customer in config["customers"]:
+        if needle in customer.lower() or customer.lower() in needle:
+            return customer
+    return mentioned  # return as-is if no match found
+
+
+def _find_employee(name: str, config: dict) -> tuple[str, str]:
+    """
+    Returns (full_name, email) for the best matching employee.
+    Tries exact match first, then partial match.
+    Returns ("", "") if no match found.
     """
     if not name:
-        return ""
+        return "", ""
     needle = name.strip().lower()
-    employees = config["employees"]
+    employees = config["employees"]  # {full_name_lower: email}
+    full_names = config["employee_names"]  # {full_name_lower: display_name}
 
     # 1. Exact match
     if needle in employees:
-        return employees[needle]
+        return full_names[needle], employees[needle]
 
-    # 2. Partial match — needle is contained in a full name
-    for full_name, email in employees.items():
-        if needle in full_name or full_name in needle:
-            return email
+    # 2. Partial match
+    for full_name_lower, email in employees.items():
+        if needle in full_name_lower or full_name_lower in needle:
+            return full_names[full_name_lower], email
 
-    return ""
+    return "", ""
+
+
+def lookup_employee_full_name(name: str, config: dict) -> str:
+    full_name, _ = _find_employee(name, config)
+    return full_name or name  # fallback to original if no match
+
+
+def lookup_employee_email(name: str, config: dict) -> str:
+    _, email = _find_employee(name, config)
+    return email
 
 
 # ── Task ID ───────────────────────────────────────────────────────────────────

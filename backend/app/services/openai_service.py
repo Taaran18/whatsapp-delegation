@@ -20,15 +20,15 @@ If a field cannot be determined, use null.
 Fields to extract:
 - task_description: string — concise summary of what needs to be done
 - assigned_to: string — person's name the task is for
-- employee_email_id: string — assignee's email if mentioned
+- employee_email_id: string — assignee's email if explicitly mentioned
 - target_date: string — deadline in YYYY-MM-DD format, or null
 - priority: one of ["Low", "Medium", "High", "Critical"]
 - approval_needed: boolean — true if approval/sign-off is mentioned
-- client_name: string — client or company name if mentioned
+- client_name: string — client or company name if mentioned (partial names are fine, write exactly as mentioned)
 - department: string — department if mentioned
 - assigned_name: string — delegator's name if different from sender
-- assigned_email_id: string — delegator's email if mentioned
-- comments: string — any extra notes or context
+- assigned_email_id: string — delegator's email if explicitly mentioned
+- comments: string — ALWAYS generate a brief contextual note about this task based on what was said, even if not explicitly stated. Example: "Rahul to update the bot flow and deploy by tomorrow."
 
 Raw message:
 \"\"\"
