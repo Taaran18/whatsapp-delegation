@@ -49,14 +49,7 @@ _See all tasks currently assigned to you that are not yet done._
 ➕ *Add a Client*
 `/add-client <name>`
 _Add a new customer name to the Config sheet._
-Example: `/add-client Acme Corp`
-
-🎤 *Voice Message*
-_Send any voice note — it will be transcribed, translated to English, and saved as a task automatically._
-
-❓ *Help*
-`/help`
-_Show this command list._"""
+Example: `/add-client Acme Corp`"""
 
 
 def _extract_event(payload: dict) -> dict:
