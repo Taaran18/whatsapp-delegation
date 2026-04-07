@@ -4,10 +4,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
 from app.config import settings
 from app.routers import webhook, tasks
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 app = FastAPI(title="WhatsApp Delegation API", version="1.0.0")
 

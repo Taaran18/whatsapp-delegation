@@ -4,14 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Database
-    db_host: str
-    db_port: int = 3306
-    db_user: str
-    db_password: str
-    db_name: str
-
-    # WhatsApp
+    # WhatsApp (maytapi)
     wa_product_id: str
     wa_token: str
     wa_phone_id: str
@@ -20,19 +13,16 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
 
-    # Google Drive (optional — voice uploads skipped if not set)
-    google_service_account_json: str = "./google_service_account.json"
+    # Google Sheets
+    google_sheet_id: str                          # ← paste your Sheet ID here in .env
+    google_service_account_json: str = ""         # path to JSON file (local dev)
+    google_service_account_json_content: str = "" # full JSON string (Render env var)
+
+    # Google Drive (optional — voice uploads)
     google_drive_folder_id: str = ""
 
     # App
     frontend_url: str = "*"
-
-    @property
-    def database_url(self) -> str:
-        return (
-            f"mysql+pymysql://{self.db_user}:{self.db_password}"
-            f"@{self.db_host}:{self.db_port}/{self.db_name}"
-        )
 
 
 settings = Settings()
