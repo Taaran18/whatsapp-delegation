@@ -1,31 +1,62 @@
 """
-POST /webhook  — receives all incoming WhatsApp messages.
+POST /webhook  — receives incoming WhatsApp messages via maytapi.
 
-Flow:
-  text message starting with /task  →  extract fields via OpenAI  →  save to DB
-  voice message                     →  download → Whisper → extract → Drive upload → save to DB
-  anything else                     →  logged but ignored
+Actual payload format (one message per webhook call):
+{
+  "type": "message",
+  "message": { "type": "text", "text": "...", "id": "..." },
+  "user": { "id": "...", "name": "...", "phone": "..." },
+  "conversation": "...",
+  "conversation_name": "...",
+  "reply": "https://api.maytapi.com/api/{product_id}/{phone_id}/sendMessage",
+  "timestamp": 1234567890
+}
+
+Some events wrap everything inside a "body" key — handled below.
 """
 import json
 import logging
 import os
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Request
+import httpx
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
-
-logger = logging.getLogger("webhook")
 
 from app.models.database import get_db
 from app.models.task import MessageLog, Task
-from app.services import openai_service, whatsapp_service, drive_service
+from app.services import openai_service, drive_service
 from app.utils.task_id import generate_task_id
+from app.config import settings
 
+logger = logging.getLogger("webhook")
 router = APIRouter()
 
 
+def _extract_event(payload: dict) -> dict:
+    """Normalise both wrapped {body: {...}} and flat payloads."""
+    if "body" in payload and isinstance(payload["body"], dict):
+        return payload["body"]
+    return payload
+
+
+async def _send_reply(reply_url: str, to_phone: str, text: str):
+    """Send a text message back via maytapi reply URL."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                reply_url,
+                headers={
+                    "x-maytapi-key": settings.wa_token,
+                    "Content-Type": "application/json",
+                },
+                json={"to_number": to_phone, "type": "text", "message": text},
+            )
+    except Exception as exc:
+        logger.warning("Failed to send reply: %s", exc)
+
+
 async def _process_text(raw_text: str, sender: str, sender_name: str, db: Session):
-    """Extract task from /task command text and persist."""
     fields = await openai_service.extract_task_fields(raw_text)
     task_id = generate_task_id(db)
 
@@ -53,20 +84,26 @@ async def _process_text(raw_text: str, sender: str, sender_name: str, db: Sessio
     return task_id
 
 
-async def _process_voice(media_id: str, sender: str, sender_name: str, db: Session):
-    """Download audio, transcribe, extract, upload to Drive, persist."""
-    # 1. Download from WhatsApp
-    local_path = await whatsapp_service.download_voice_message(media_id)
+async def _process_voice(media_url: str, sender: str, sender_name: str, db: Session):
+    import tempfile
+    # Download audio from URL
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(media_url, headers={"x-maytapi-key": settings.wa_token})
+        resp.raise_for_status()
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
+        tmp.write(resp.content)
+        tmp.flush()
+        tmp.close()
+        local_path = tmp.name
 
     try:
-        # 2. Transcribe
         transcription = await openai_service.transcribe_audio(local_path)
 
-        # 3. Upload to Drive
-        filename = f"voice_{sender}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.ogg"
-        drive_url = drive_service.upload_audio_to_drive(local_path, filename)
+        drive_url = None
+        if settings.google_drive_folder_id:
+            filename = f"voice_{sender}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.ogg"
+            drive_url = drive_service.upload_audio_to_drive(local_path, filename)
 
-        # 4. Extract fields
         fields = await openai_service.extract_task_fields(transcription)
         task_id = generate_task_id(db)
 
@@ -98,62 +135,75 @@ async def _process_voice(media_id: str, sender: str, sender_name: str, db: Sessi
 
 @router.get("/webhook")
 async def webhook_verify(request: Request):
-    """whapi.cloud sends a GET to verify the webhook URL is reachable."""
+    """maytapi GET verification."""
     logger.info("Webhook verification GET received")
     return {"status": "ok"}
 
 
 @router.post("/webhook")
-async def webhook(request: Request, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def webhook(request: Request, db: Session = Depends(get_db)):
     payload = await request.json()
     logger.info("WEBHOOK RECEIVED: %s", json.dumps(payload, indent=2))
 
-    # Log every incoming message
-    messages = payload.get("messages", [])
-    logger.info("Message count: %d", len(messages))
-    for msg in messages:
-        msg_id = msg.get("id", "")
-        sender = msg.get("from", "")
-        sender_name = msg.get("pushName") or msg.get("notifyName") or sender
-        msg_type = msg.get("type", "other")
+    event = _extract_event(payload)
 
-        log = MessageLog(
-            wa_message_id=msg_id,
-            sender_number=sender,
-            message_type=msg_type if msg_type in ("text", "voice") else "other",
-            raw_payload=json.dumps(payload),
-        )
-        db.add(log)
-        db.commit()
+    # Only process incoming messages (not sent by us)
+    if event.get("type") != "message":
+        logger.info("Ignoring event type: %s", event.get("type"))
+        return {"status": "ignored"}
 
-        task_id = None
-        error = None
+    msg = event.get("message", {})
+    user = event.get("user", {})
+    reply_url = event.get("reply", "")
 
-        try:
-            if msg_type == "text":
-                body: str = msg.get("text", {}).get("body", "")
-                logger.info("Text message from %s: %r", sender, body)
-                if body.lower().startswith("/assign-task"):
-                    task_id = await _process_text(body, sender, sender_name, db)
+    msg_type = msg.get("type", "")
+    msg_id = msg.get("id", "")
+    sender = user.get("phone", "") or user.get("id", "")
+    sender_name = user.get("name") or event.get("conversation_name") or sender
+    from_me = msg.get("fromMe", False)
 
-            elif msg_type in ("audio", "voice", "ptt"):
-                media_id = msg.get("audio", {}).get("id") or msg.get("voice", {}).get("id")
-                if media_id:
-                    task_id = await _process_voice(media_id, sender, sender_name, db)
+    logger.info("msg_type=%s sender=%s fromMe=%s", msg_type, sender, from_me)
 
-        except Exception as exc:
-            error = str(exc)
+    # Skip messages sent by the bot itself
+    if from_me:
+        return {"status": "ignored"}
 
-        # Update log with result
-        log.processed = 1 if task_id else 0
-        log.task_id = task_id
-        log.error_message = error
-        db.commit()
+    # Log raw message
+    log = MessageLog(
+        wa_message_id=msg_id,
+        sender_number=sender,
+        message_type="text" if msg_type == "text" else ("voice" if msg_type in ("audio", "ptt", "voice") else "other"),
+        raw_payload=json.dumps(payload),
+    )
+    db.add(log)
+    db.commit()
 
-        if task_id:
-            await whatsapp_service.send_text_message(
-                sender,
-                f"Task recorded! ID: {task_id}",
-            )
+    task_id = None
+    error = None
+
+    try:
+        if msg_type == "text":
+            body: str = msg.get("text", "")
+            logger.info("Text body: %r", body)
+            if body.lower().startswith("/assign-task"):
+                task_id = await _process_text(body, sender, sender_name, db)
+
+        elif msg_type in ("audio", "ptt", "voice"):
+            media_url = msg.get("url")
+            if media_url:
+                task_id = await _process_voice(media_url, sender, sender_name, db)
+
+    except Exception as exc:
+        logger.exception("Error processing message: %s", exc)
+        error = str(exc)
+
+    # Update log
+    log.processed = 1 if task_id else 0
+    log.task_id = task_id
+    log.error_message = error
+    db.commit()
+
+    if task_id and reply_url:
+        await _send_reply(reply_url, sender, f"Task recorded! ID: {task_id}")
 
     return {"status": "ok"}
