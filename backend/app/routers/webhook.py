@@ -75,7 +75,7 @@ async def _send_reply(reply_url: str, to_phone: str, text: str):
         logger.warning("Failed to send reply: %s", exc)
 
 
-async def _process_text(raw_text: str, sender: str, sender_name: str) -> dict:
+async def _process_text(raw_text: str, sender: str, sender_name: str) -> tuple[dict, str]:
     config = sheets_service.get_config_lookup()
     fields = await openai_service.extract_task_fields(raw_text)
 
@@ -83,7 +83,11 @@ async def _process_text(raw_text: str, sender: str, sender_name: str) -> dict:
     employee_email = fields.get("employee_email_id") or sheets_service.lookup_employee_email(assigned_to, config)
     assigned_name  = sheets_service.lookup_employee_full_name(fields.get("assigned_name") or sender_name, config)
     assigned_email = fields.get("assigned_email_id") or sheets_service.lookup_employee_email(sender_name, config)
-    client_name    = sheets_service.lookup_customer_name(fields.get("client_name", ""), config)
+    client_name, client_matched = sheets_service.lookup_customer_name(fields.get("client_name", ""), config)
+    client_warning = "" if client_matched or not client_name else (
+        f"\n⚠️ Client *{client_name}* was not found in the Config list. "
+        f"Please reply:\n`/update {'{TASK_ID}'} client: <correct client name>`\nto fix it."
+    )
 
     task_id = sheets_service.get_next_task_id()
     task_data = {
@@ -107,7 +111,8 @@ async def _process_text(raw_text: str, sender: str, sender_name: str) -> dict:
         "message_type":       raw_text,
     }
     sheets_service.append_task(task_data)
-    return task_data
+    warning = client_warning.replace("{TASK_ID}", task_id) if client_warning else ""
+    return task_data, warning
 
 
 async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
@@ -149,7 +154,11 @@ async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
         employee_email = fields.get("employee_email_id") or sheets_service.lookup_employee_email(assigned_to, config)
         assigned_name  = sheets_service.lookup_employee_full_name(fields.get("assigned_name") or sender_name, config)
         assigned_email = fields.get("assigned_email_id") or sheets_service.lookup_employee_email(sender_name, config)
-        client_name    = sheets_service.lookup_customer_name(fields.get("client_name", ""), config)
+        client_name, client_matched = sheets_service.lookup_customer_name(fields.get("client_name", ""), config)
+        client_warning = "" if client_matched or not client_name else (
+            f"\n⚠️ Client *{client_name}* was not found in the Config list. "
+            f"Please reply:\n`/update {{TASK_ID}} client: <correct client name>`\nto fix it."
+        )
 
         task_id = sheets_service.get_next_task_id()
         task_data = {
@@ -174,7 +183,8 @@ async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
             "message_type":       f"[Voice] {original_text}" if original_text == english_text else f"[Voice] {original_text} | [EN] {english_text}",
         }
         sheets_service.append_task(task_data)
-        return task_data
+        warning = client_warning.replace("{TASK_ID}", task_id) if client_warning else ""
+        return task_data, warning
     finally:
         os.unlink(tmp.name)
 
@@ -261,6 +271,7 @@ async def webhook(request: Request):
         return {"status": "ignored"}
 
     task_data = None
+    client_warning = ""
     error = None
 
     try:
@@ -273,7 +284,7 @@ async def webhook(request: Request):
                 return {"status": "ok"}
 
             elif body.lower().startswith("/task"):
-                task_data = await _process_text(body, sender, sender_name)
+                task_data, client_warning = await _process_text(body, sender, sender_name)
 
             elif body.lower().startswith("/status"):
                 match = re.search(r"(TASK-\d+)", body, re.IGNORECASE)
@@ -320,7 +331,7 @@ async def webhook(request: Request):
         elif msg_type in ("audio", "ptt", "voice"):
             media_url = msg.get("url")
             if media_url:
-                task_data = await _process_voice(media_url, sender, sender_name)
+                task_data, client_warning = await _process_voice(media_url, sender, sender_name)
 
     except Exception as exc:
         logger.exception("Error processing message: %s", exc)
@@ -339,6 +350,8 @@ async def webhook(request: Request):
     # Send confirmation with filled/pending breakdown
     if task_data and reply_url:
         confirmation = sheets_service.build_confirmation_message(task_data)
+        if client_warning:
+            confirmation += client_warning
         await _send_reply(reply_url, sender, confirmation)
 
     return {"status": "ok"}

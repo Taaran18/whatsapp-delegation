@@ -83,19 +83,21 @@ def get_config_lookup() -> dict:
     return {"employees": employees, "employee_names": employee_names, "customers": customers}
 
 
-def lookup_customer_name(mentioned: str, config: dict) -> str:
+def lookup_customer_name(mentioned: str, config: dict) -> tuple[str, bool]:
     """
     Match a partial/full client name against Config Customer Names.
-    e.g. "Bikaner" → "Bikaner Polymers Pvt Ltd"
-    Returns the full name from Config if matched, else returns the original.
+    Returns (full_name, matched):
+      - ("Bikaner Polymers Pvt Ltd", True)  → partial match found in Config
+      - ("Singhdaur", False)                → mentioned but no match in Config
+      - ("", False)                         → nothing mentioned
     """
-    if not mentioned:
-        return ""
+    if not mentioned or not mentioned.strip():
+        return "", False
     needle = mentioned.strip().lower()
     for customer in config["customers"]:
         if needle in customer.lower() or customer.lower() in needle:
-            return customer
-    return mentioned  # return as-is if no match found
+            return customer, True
+    return mentioned.strip(), False  # keep what was said, flag as unmatched
 
 
 def _find_employee(name: str, config: dict) -> tuple[str, str]:
