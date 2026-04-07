@@ -132,6 +132,23 @@ async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
         os.unlink(tmp.name)
 
 
+async def _process_done(raw_text: str, sender: str, reply_url: str):
+    """Handle /done TASK-XXXX command."""
+    match = re.search(r"(TASK-\d+)", raw_text, re.IGNORECASE)
+    if not match:
+        await _send_reply(reply_url, sender, "❌ Could not find a Task ID. Use format:\n/done TASK-0001")
+        return
+
+    task_id = match.group(1).upper()
+    result = sheets_service.mark_task_done(task_id)
+
+    if result is None:
+        await _send_reply(reply_url, sender, f"❌ Task {task_id} not found.")
+        return
+
+    await _send_reply(reply_url, sender, f"✅ *{task_id}* marked as *Done!*\nUpdated at: {result.get('updated_timestamp', '')}")
+
+
 async def _process_update(raw_text: str, sender: str, reply_url: str):
     """Handle /update TASK-XXXX ... command."""
     # Extract task ID from message e.g. "/update TASK-0003 email: ..."
@@ -206,6 +223,11 @@ async def webhook(request: Request):
 
             if body.lower().startswith("/task"):
                 task_data = await _process_text(body, sender, sender_name)
+
+            elif body.lower().startswith("/done"):
+                await _process_done(body, sender, reply_url)
+                sheets_service.log_message(sender, msg_type, body, "", "")
+                return {"status": "ok"}
 
             elif body.lower().startswith("/update"):
                 await _process_update(body, sender, reply_url)

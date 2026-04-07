@@ -21,7 +21,7 @@ TASK_COLUMNS = [
     "assignee_contact", "assigned_to", "employee_email_id", "target_date",
     "priority", "approval_needed", "client_name", "department",
     "assigned_name", "assigned_email_id", "comments", "source_link",
-    "status", "message_type",
+    "status", "message_type", "updated_timestamp",
 ]
 
 TASK_DISPLAY_NAMES = {
@@ -211,6 +211,9 @@ def update_task(task_id: str, updates: dict) -> dict | None:
     if row_index is None:
         return None
 
+    # Always stamp updated_timestamp on any update
+    updates["updated_timestamp"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
     for col_name, value in updates.items():
         if col_name in TASK_COLUMNS:
             col_letter = chr(ord("A") + TASK_COLUMNS.index(col_name))
@@ -227,6 +230,11 @@ def update_task(task_id: str, updates: dict) -> dict | None:
             )
 
     return get_task_by_id(task_id)
+
+
+def mark_task_done(task_id: str) -> dict | None:
+    """Set status to Done and stamp updated_timestamp."""
+    return update_task(task_id, {"status": "Done"})
 
 
 # ── Confirmation message builder ──────────────────────────────────────────────
