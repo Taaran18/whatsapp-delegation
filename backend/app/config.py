@@ -20,9 +20,9 @@ class Settings(BaseSettings):
     # OpenAI
     openai_api_key: str
 
-    # Google Drive
+    # Google Drive (optional — voice uploads skipped if not set)
     google_service_account_json: str = "./google_service_account.json"
-    google_drive_folder_id: str
+    google_drive_folder_id: str = ""
 
     # App
     frontend_url: str = "*"
