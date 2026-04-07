@@ -272,6 +272,42 @@ def build_confirmation_message(task: dict) -> str:
 
 # ── Message Logs ──────────────────────────────────────────────────────────────
 
+def add_client_to_config(client_name: str) -> bool:
+    """
+    Append a new customer name to col D of the Config sheet.
+    Finds the next empty row in col D and writes there.
+    Returns False if client already exists.
+    """
+    service = _get_service()
+
+    # Check if already exists
+    result = (
+        service.spreadsheets()
+        .values()
+        .get(spreadsheetId=settings.google_sheet_id, range="Config!D:D")
+        .execute()
+    )
+    existing = [r[0].strip().lower() for r in result.get("values", []) if r]
+    if client_name.strip().lower() in existing:
+        return False  # already exists
+
+    # Find next empty row in col D
+    next_row = len(result.get("values", [])) + 1
+
+    (
+        service.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=settings.google_sheet_id,
+            range=f"Config!D{next_row}",
+            valueInputOption="USER_ENTERED",
+            body={"values": [[client_name.strip()]]},
+        )
+        .execute()
+    )
+    return True
+
+
 def log_message(sender: str, msg_type: str, raw_text: str, task_id: str = "", error: str = "") -> None:
     service = _get_service()
     row = [

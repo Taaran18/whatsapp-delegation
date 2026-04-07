@@ -46,6 +46,11 @@ _Get the current details of a specific task._
 `/my-tasks`
 _See all tasks currently assigned to you that are not yet done._
 
+➕ *Add a Client*
+`/add-client <name>`
+_Add a new customer name to the Config sheet._
+Example: `/add-client Acme Corp`
+
 🎤 *Voice Message*
 _Send any voice note — it will be transcribed, translated to English, and saved as a task automatically._
 
@@ -316,6 +321,19 @@ async def webhook(request: Request):
                             f"  Priority: {t.get('priority') or '—'} | Due: {t.get('target_date') or '—'} | Status: {t.get('status') or '—'}"
                         )
                     await _send_reply(reply_url, sender, "\n".join(lines))
+                return {"status": "ok"}
+
+            elif body.lower().startswith("/add-client"):
+                client_name = body[len("/add-client"):].strip()
+                if not client_name:
+                    await _send_reply(reply_url, sender, "❌ Please provide a client name.\nExample: `/add-client Acme Corp`")
+                else:
+                    added = sheets_service.add_client_to_config(client_name)
+                    if added:
+                        await _send_reply(reply_url, sender, f"✅ Client *{client_name}* added to Config successfully!")
+                    else:
+                        await _send_reply(reply_url, sender, f"⚠️ Client *{client_name}* already exists in Config.")
+                sheets_service.log_message(sender, msg_type, body, "", "")
                 return {"status": "ok"}
 
             elif body.lower().startswith("/done"):
