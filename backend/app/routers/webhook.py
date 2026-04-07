@@ -22,6 +22,33 @@ from app.services import openai_service, drive_service, sheets_service
 logger = logging.getLogger("webhook")
 router = APIRouter()
 
+HELP_MESSAGE = """🤖 *WhatsApp Delegation Bot — Commands*
+
+📌 *Create a Task*
+`/task <description>`
+_Assign a task to someone. Mention name, deadline, priority, client._
+Example: `/task give website redesign to Rahul by Friday, high priority, client: Acme Corp`
+
+✅ *Mark Task Done*
+`/done TASK-0001`
+_Changes task status to Done and records the timestamp._
+
+🔄 *Update a Task*
+`/update TASK-0001 <details>`
+_Fill in any pending/blank fields on an existing task._
+Example: `/update TASK-0001 department: Marketing, approval: yes`
+
+📋 *Check Task Status*
+`/status TASK-0001`
+_Get the current details of a specific task._
+
+🎤 *Voice Message*
+_Send any voice note — it will be transcribed, translated to English, and saved as a task automatically._
+
+❓ *Help*
+`/help`
+_Show this command list._"""
+
 
 def _extract_event(payload: dict) -> dict:
     if "body" in payload and isinstance(payload["body"], dict):
@@ -237,8 +264,24 @@ async def webhook(request: Request):
             body: str = msg.get("text", "")
             logger.info("Text body: %r", body)
 
-            if body.lower().startswith("/task"):
+            if body.lower().strip() == "/help":
+                await _send_reply(reply_url, sender, HELP_MESSAGE)
+                return {"status": "ok"}
+
+            elif body.lower().startswith("/task"):
                 task_data = await _process_text(body, sender, sender_name)
+
+            elif body.lower().startswith("/status"):
+                match = re.search(r"(TASK-\d+)", body, re.IGNORECASE)
+                if not match:
+                    await _send_reply(reply_url, sender, "❌ Usage: /status TASK-0001")
+                else:
+                    task = sheets_service.get_task_by_id(match.group(1).upper())
+                    if not task:
+                        await _send_reply(reply_url, sender, f"❌ Task {match.group(1).upper()} not found.")
+                    else:
+                        await _send_reply(reply_url, sender, sheets_service.build_confirmation_message(task))
+                return {"status": "ok"}
 
             elif body.lower().startswith("/done"):
                 await _process_done(body, sender, reply_url)
