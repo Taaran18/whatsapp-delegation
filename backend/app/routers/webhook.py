@@ -80,24 +80,34 @@ async def _process_text(raw_text: str, sender: str, sender_name: str) -> dict:
 
 
 async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
-    async with httpx.AsyncClient(timeout=30) as client:
+    # Detect file extension from URL
+    ext = ".ogg"
+    for candidate in [".ogg", ".mp3", ".mp4", ".m4a", ".wav", ".opus"]:
+        if candidate in media_url.lower():
+            ext = candidate
+            break
+
+    async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.get(media_url, headers={"x-maytapi-key": settings.wa_token})
         resp.raise_for_status()
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg")
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
         tmp.write(resp.content)
         tmp.flush()
         tmp.close()
 
     try:
-        transcription = await openai_service.transcribe_audio(tmp.name)
+        # Transcribe (original language) + translate (to English)
+        original_text, english_text = await openai_service.transcribe_audio(tmp.name)
+        logger.info("Voice transcription: %r | translation: %r", original_text, english_text)
 
-        drive_url = ""
-        if settings.google_drive_folder_id:
-            filename = f"voice_{sender}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.ogg"
-            drive_url = drive_service.upload_audio_to_drive(tmp.name, filename)
+        # Upload to Google Drive
+        filename = f"voice_{sender}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}{ext}"
+        drive_url = drive_service.upload_audio_to_drive(tmp.name, filename)
+        logger.info("Uploaded to Drive: %s", drive_url)
 
+        # Extract task fields from the English translation
         config = sheets_service.get_config_lookup()
-        fields = await openai_service.extract_task_fields(transcription)
+        fields = await openai_service.extract_task_fields(english_text)
 
         assigned_to    = sheets_service.lookup_employee_full_name(fields.get("assigned_to", ""), config)
         employee_email = fields.get("employee_email_id") or sheets_service.lookup_employee_email(assigned_to, config)
@@ -124,7 +134,8 @@ async def _process_voice(media_url: str, sender: str, sender_name: str) -> dict:
             "comments":           fields.get("comments", ""),
             "source_link":        drive_url,
             "status":             "Pending",
-            "message_type":       f"[Voice] {transcription}",  # store transcription
+            # Store original + translation in message_type column
+            "message_type":       f"[Voice] {original_text}" if original_text == english_text else f"[Voice] {original_text} | [EN] {english_text}",
         }
         sheets_service.append_task(task_data)
         return task_data

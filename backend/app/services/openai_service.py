@@ -39,15 +39,27 @@ Respond with ONLY the JSON object, no markdown, no explanation.
 """
 
 
-async def transcribe_audio(audio_path: str) -> str:
-    """Transcribe a voice message file using Whisper."""
+async def transcribe_audio(audio_path: str) -> tuple[str, str]:
+    """
+    Transcribe and translate a voice message using Whisper.
+    Returns (original_transcription, english_translation).
+    If audio is already in English, both will be the same.
+    """
     with open(audio_path, "rb") as audio_file:
-        response = await client.audio.transcriptions.create(
+        original = await client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
             response_format="text",
         )
-    return response
+
+    with open(audio_path, "rb") as audio_file:
+        translated = await client.audio.translations.create(
+            model="whisper-1",
+            file=audio_file,
+            response_format="text",
+        )
+
+    return str(original).strip(), str(translated).strip()
 
 
 async def extract_task_fields(raw_message: str) -> dict:
