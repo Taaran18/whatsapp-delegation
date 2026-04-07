@@ -42,6 +42,10 @@ Example: `/update TASK-0001 department: Marketing, approval: yes`
 `/status TASK-0001`
 _Get the current details of a specific task._
 
+📂 *My Pending Tasks*
+`/my-tasks`
+_See all tasks currently assigned to you that are not yet done._
+
 🎤 *Voice Message*
 _Send any voice note — it will be transcribed, translated to English, and saved as a task automatically._
 
@@ -189,7 +193,7 @@ async def _process_done(raw_text: str, sender: str, reply_url: str):
         await _send_reply(reply_url, sender, f"❌ Task {task_id} not found.")
         return
 
-    await _send_reply(reply_url, sender, f"✅ *{task_id}* marked as *Done!*\nUpdated at: {result.get('updated_timestamp', '')}")
+    await _send_reply(reply_url, sender, f"✅ *{task_id}* marked as *Done!*")
 
 
 async def _process_update(raw_text: str, sender: str, reply_url: str):
@@ -281,6 +285,26 @@ async def webhook(request: Request):
                         await _send_reply(reply_url, sender, f"❌ Task {match.group(1).upper()} not found.")
                     else:
                         await _send_reply(reply_url, sender, sheets_service.build_confirmation_message(task))
+                return {"status": "ok"}
+
+            elif body.lower().strip() == "/my-tasks":
+                all_tasks = sheets_service.get_all_tasks()
+                # Match by sender phone OR assignee_contact
+                my_tasks = [
+                    t for t in all_tasks
+                    if (t.get("assignee_contact") == sender or t.get("assignee_contact") == f"+{sender}")
+                    and t.get("status", "").lower() not in ("done", "completed", "cancelled")
+                ]
+                if not my_tasks:
+                    await _send_reply(reply_url, sender, "✅ You have no pending tasks!")
+                else:
+                    lines = [f"📋 *Your Pending Tasks ({len(my_tasks)})*\n"]
+                    for t in my_tasks:
+                        lines.append(
+                            f"• *{t.get('task_id')}* — {t.get('task_description') or 'No description'}\n"
+                            f"  Priority: {t.get('priority') or '—'} | Due: {t.get('target_date') or '—'} | Status: {t.get('status') or '—'}"
+                        )
+                    await _send_reply(reply_url, sender, "\n".join(lines))
                 return {"status": "ok"}
 
             elif body.lower().startswith("/done"):
